@@ -1098,21 +1098,32 @@ class SectionStructure(Structure):
 
         Returns bytes() under Python 3.x and set() under Python 2.7
         """
-
-        if start is None:
-            offset = self.get_PointerToRawData_adj()
+        if self.pe._PE__from_memory:
+            if start is None:
+                offset = self.get_VirtualAddress_adj()
+            else:
+                offset = start
         else:
-            offset = ( start - self.get_VirtualAddress_adj() ) + self.get_PointerToRawData_adj()
+            if start is None:
+                offset = self.get_PointerToRawData_adj()
+            else:
+                offset = ( start - self.get_VirtualAddress_adj() ) + self.get_PointerToRawData_adj()
 
         if length is not None:
             end = offset + length
+        elif self.pe._PE__from_memory:
+            end = offset + self.Misc_VirtualSize
         else:
             end = offset + self.SizeOfRawData
         # PointerToRawData is not adjusted here as we might want to read any possible extra bytes
         # that might get cut off by aligning the start (and hence cutting something off the end)
         #
-        if end > self.PointerToRawData + self.SizeOfRawData:
-            end = self.PointerToRawData + self.SizeOfRawData
+        if self.pe._PE__from_memory:
+            if end > self.VirtualAddress_adj + self.Misc_VirtualSize:
+                end = self.VirtualAddress_adj + self.Misc_VirtualSize
+        else:
+            if end > self.PointerToRawData + self.SizeOfRawData:
+                end = self.PointerToRawData + self.SizeOfRawData
         return self.pe.__data__[offset:end]
 
 
@@ -1138,6 +1149,8 @@ class SectionStructure(Structure):
 
 
     def get_offset_from_rva(self, rva):
+        if self.pe._PE__from_memory:
+            return rva
         return rva - self.get_VirtualAddress_adj() + self.get_PointerToRawData_adj()
 
 
@@ -1794,7 +1807,7 @@ class PE(object):
         ('I,TimeDateStamp', 'H,OffsetModuleName', 'H,Reserved') )
 
     def __init__(self, name=None, data=None, fast_load=None,
-                 max_symbol_exports=MAX_SYMBOL_EXPORT_COUNT):
+                 max_symbol_exports=MAX_SYMBOL_EXPORT_COUNT, from_memory=False):
 
         self.max_symbol_exports = max_symbol_exports
 
@@ -1812,6 +1825,7 @@ class PE(object):
         # in order to save the modifications made
         self.__structures__ = []
         self.__from_file = None
+        self.__from_memory = from_memory
 
          # We only want to print these warnings once
         self.FileAlignment_Warning = False
@@ -1852,6 +1866,9 @@ class PE(object):
         self.__structures__.append(structure)
 
         return structure
+
+    def from_memory(self):
+        return self.__from_memory
 
 
     def __parse__(self, fname, data, fast_load):
@@ -2849,7 +2866,10 @@ class PE(object):
 
             elif dbg.Type == 2:
                 # if IMAGE_DEBUG_TYPE_CODEVIEW
-                dbg_type_offset = dbg.PointerToRawData
+                if self.__from_memory:
+                    dbg_type_offset = self.get_rva_from_offset(dbg.PointerToRawData)
+                else:
+                    dbg_type_offset = dbg.PointerToRawData
                 dbg_type_size = dbg.SizeOfData
                 dbg_type_data = self.__data__[dbg_type_offset:dbg_type_offset+dbg_type_size]
 
@@ -2904,7 +2924,10 @@ class PE(object):
 
             elif dbg.Type == 4:
                 # IMAGE_DEBUG_TYPE_MISC
-                dbg_type_offset = dbg.PointerToRawData
+                if self.__from_memory:
+                    dbg_type_offset = self.get_rva_from_offset(dbg.PointerToRawData)
+                else:
+                    dbg_type_offset = dbg.PointerToRawData
                 dbg_type_size = dbg.SizeOfData
                 dbg_type_data = self.__data__[dbg_type_offset:dbg_type_offset+dbg_type_size]
                 ___IMAGE_DEBUG_MISC_format__ = ['IMAGE_DEBUG_MISC',
@@ -4006,8 +4029,10 @@ class PE(object):
                         'Too may errors parsing the import directory. '
                         'Invalid import data at RVA: 0x{0:x}'.format(rva) )
                     break
-
-                if not import_data:
+                
+                # On execution is normal zero pages due to paging system.
+                # It's very often have zeros in the import_data space that not yeild import_data arrays 
+                if not import_data and not self.__from_memory: 
                     error_count += 1
                     # TODO: do not continue here
                     continue
@@ -4234,15 +4259,18 @@ class PE(object):
             if repeated_address >= MAX_REPEATED_ADDRESSES:
                 return []
 
-            # if the addresses point somewhere but the difference between the highest
-            # and lowest address is larger than MAX_ADDRESS_SPREAD we assume a bogus
-            # table as the addresses should be contained within a module
-            if (addresses_of_data_set_32 and
-                max(addresses_of_data_set_32) - min(addresses_of_data_set_32) > MAX_ADDRESS_SPREAD ):
-                return []
-            if (addresses_of_data_set_64 and
-                max(addresses_of_data_set_64) - min(addresses_of_data_set_64) > MAX_ADDRESS_SPREAD ):
-                return []
+            # On execution some IAT address pointing outside the module, 
+            # so range beween outside and inside pointers are larger than MAX_ADDRESS_SPREAD
+            if not self.__from_memory:
+                # if the addresses point somewhere but the difference between the highest
+                # and lowest address is larger than MAX_ADDRESS_SPREAD we assume a bogus
+                # table as the addresses should be contained within a module
+                if (addresses_of_data_set_32 and
+                    max(addresses_of_data_set_32) - min(addresses_of_data_set_32) > MAX_ADDRESS_SPREAD ):
+                    return []
+                if (addresses_of_data_set_64 and
+                    max(addresses_of_data_set_64) - min(addresses_of_data_set_64) > MAX_ADDRESS_SPREAD ):
+                    return []
 
             failed = False
             try:
@@ -4401,6 +4429,12 @@ class PE(object):
         Given a RVA and the size of the chunk to retrieve, this method
         will find the section where the data lies and return the data.
         """
+        if self.__from_memory:
+            if length:
+                end = rva + length
+            else:
+                end = None
+            return self.__data__[rva:end]
 
         s = self.get_section_by_rva(rva)
 
@@ -4460,7 +4494,9 @@ class PE(object):
         Given a RVA , this method will find the section where the
         data lies and return the offset within the file.
         """
-
+        if self.__from_memory:
+            return rva
+            
         s = self.get_section_by_rva(rva)
         if not s:
 
