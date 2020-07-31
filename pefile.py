@@ -1937,6 +1937,12 @@ class PE(object):
         if self.DOS_HEADER.e_lfanew > len(self.__data__):
             raise PEFormatError('Invalid e_lfanew value, probably not a PE file')
 
+        # Dynamic Structure for DOS_STUB
+        self.DOS_STUB = self.__unpack_data__(
+            ('IMAGE_DOS_STUB', ('{}s,stub'.format(self.DOS_HEADER.e_lfanew-64),)),
+            self.__data__[64:self.DOS_HEADER.e_lfanew],
+            file_offset = 64)
+
         nt_headers_offset = self.DOS_HEADER.e_lfanew
 
         self.NT_HEADERS = self.__unpack_data__(
