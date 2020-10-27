@@ -143,6 +143,10 @@ IMAGE_ORDINAL_FLAG64            = 0x8000000000000000
 OPTIONAL_HEADER_MAGIC_PE        = 0x10b
 OPTIONAL_HEADER_MAGIC_PE_PLUS   = 0x20b
 
+UNW_FLAG_EHANDLER  = 0x01
+UNW_FLAG_UHANDLER  = 0x02
+UNW_FLAG_CHAININFO = 0x04
+
 def two_way_dict(pairs):
     return dict([(e[1], e[0]) for e in pairs]+pairs)
 
@@ -1515,7 +1519,7 @@ else: # Python 2.x
         b"!#$%&'()-@^_`{}~+,.;=[]")
 
 def is_valid_dos_filename(s):
-    if s is None or not isinstance(s, (str, bytes, bytearray)):
+    if s is None or s == '' or not isinstance(s, (str, bytes, bytearray)):
         return False
     # Allow path separators as import names can contain directories.
     allowed = allowed_filename + b'\\/'
@@ -1697,6 +1701,27 @@ class PE(object):
         ('I,Name',
         'I,OffsetToData'))
 
+    __IMAGE_RUNTIME_FUNCTION_ENTRY_format__ = ('IMAGE_RUNTIME_FUNCTION_ENTRY',
+        ('I,BeginAddress',
+        'I,EndAddress',
+        'I,UnwindInformation',
+        )) 
+
+    __UNWIND_INFO_format_1__ = ('IMAGE_UNWIND_INFO',
+        ('B,Version_Flags',
+        'B,SizeOfProlog',
+        'B,CountOfUnwindCode',
+        'B,FrameRegister_FrameOffset',
+        ))
+
+    __UNWIND_CODE_format__ = ('IMAGE_UNWIND_INFO',
+        ('B,CodeOffset',
+        'B,UnwindOpOpinfo_FrameOffset'))
+    
+    __UNWIND_INFO_format_2__ = ('UNWIND_INFO_2',
+        ('I,ExceptionHandler,FunctionEntry',
+        'I'))
+
     __IMAGE_RESOURCE_DATA_ENTRY_format__ = ('IMAGE_RESOURCE_DATA_ENTRY',
         ('I,OffsetToData', 'I,Size', 'I,CodePage', 'I,Reserved'))
 
@@ -1762,16 +1787,38 @@ class PE(object):
         'I,ProcessHeapFlags',
         'I,ProcessAffinityMask',
         'H,CSDVersion',
-        'H,Reserved1',
+        'H,DependentLoadFlags',
         'I,EditList',
         'I,SecurityCookie',
         'I,SEHandlerTable',
         'I,SEHandlerCount',
         'I,GuardCFCheckFunctionPointer',
-        'I,Reserved2',
+        'I,GuardCFDispatchFunctionPointer',
         'I,GuardCFFunctionTable',
         'I,GuardCFFunctionCount',
-        'I,GuardFlags' ) )
+        'I,GuardFlags',
+        'H,CodeIntegrity_Flags',
+        'H,CodeIntegrity_Catalog',
+        'I,CodeIntegrity_CatologOffset',
+        'I,CodeIntegrity_Reserved',
+        'I,GuardAddressTakenIatEntryTable',
+        'I,GuardAddressTakenIatEntryCount',
+        'I,GuardLongJumpTargetTable',
+        'I,GuardLongJumpTargetCount',
+        'I,DynamicValueRelocTable',
+        'I,CHPEMetadataPointer',
+        'I,GuardRFFailureRoutine',
+        'I,GuardRFFailureRoutineFunctionPointer',
+        'I,DynamicValueRelocTableOffset',
+        'H,DynamicValueRelocTableSection',
+        'H,Reserved2',
+        'I,GuardRFVerifyStackPointerFunctionPointer',
+        'I,HotPatchTableOffset',
+        'I,Reserved3',
+        'I,EnclaveConfigurationPointer',
+        'I,VolatileMetadataPointer',
+        'I,GuardEHContinuationTable',
+        'I,GuardEHContinuationCount', ) )
 
     __IMAGE_LOAD_CONFIG_DIRECTORY64_format__ = ('IMAGE_LOAD_CONFIG_DIRECTORY',
         ('I,Size',
@@ -1789,16 +1836,38 @@ class PE(object):
         'Q,ProcessAffinityMask',
         'I,ProcessHeapFlags',
         'H,CSDVersion',
-        'H,Reserved1',
+        'H,DependentLoadFlags',
         'Q,EditList',
         'Q,SecurityCookie',
         'Q,SEHandlerTable',
         'Q,SEHandlerCount',
         'Q,GuardCFCheckFunctionPointer',
-        'Q,Reserved2',
+        'Q,GuardCFDispatchFunctionPointer',
         'Q,GuardCFFunctionTable',
         'Q,GuardCFFunctionCount',
-        'I,GuardFlags' ) )
+        'I,GuardFlags',
+        'H,CodeIntegrity_Flags',
+        'H,CodeIntegrity_Catalog',
+        'I,CodeIntegrity_CatologOffset',
+        'I,CodeIntegrity_Reserved',
+        'Q,GuardAddressTakenIatEntryTable',
+        'Q,GuardAddressTakenIatEntryCount',
+        'Q,GuardLongJumpTargetTable',
+        'Q,GuardLongJumpTargetCount',
+        'Q,DynamicValueRelocTable',
+        'Q,CHPEMetadataPointer',
+        'Q,GuardRFFailureRoutine',
+        'Q,GuardRFFailureRoutineFunctionPointer',
+        'I,DynamicValueRelocTableOffset',
+        'H,DynamicValueRelocTableSection',
+        'H,Reserved2',
+        'Q,GuardRFVerifyStackPointerFunctionPointer',
+        'I,HotPatchTableOffset',
+        'I,Reserved3',
+        'Q,EnclaveConfigurationPointer',
+        'Q,VolatileMetadataPointer',
+        'Q,GuardEHContinuationTable',
+        'Q,GuardEHContinuationCount', ) )
 
     __IMAGE_BOUND_IMPORT_DESCRIPTOR_format__ = ('IMAGE_BOUND_IMPORT_DESCRIPTOR',
         ('I,TimeDateStamp', 'H,OffsetModuleName', 'H,NumberOfModuleForwarderRefs'))
@@ -2527,6 +2596,7 @@ class PE(object):
             ('IMAGE_DIRECTORY_ENTRY_IMPORT', self.parse_import_directory),
             ('IMAGE_DIRECTORY_ENTRY_EXPORT', self.parse_export_directory),
             ('IMAGE_DIRECTORY_ENTRY_RESOURCE', self.parse_resources_directory),
+            ('IMAGE_DIRECTORY_ENTRY_EXCEPTION', self.parse_directory_exception),
             ('IMAGE_DIRECTORY_ENTRY_DEBUG', self.parse_debug_directory),
             ('IMAGE_DIRECTORY_ENTRY_BASERELOC', self.parse_relocations_directory),
             ('IMAGE_DIRECTORY_ENTRY_TLS', self.parse_directory_tls),
@@ -3925,20 +3995,23 @@ class PE(object):
                     'Invalid import data at RVA: 0x{0:x}'.format(rva) )
                 break
 
-            if not import_data:
+            if not import_data and not self.__from_memory:
                 error_count += 1
                 continue
 
             dll = self.get_string_at_rva(import_desc.szName, MAX_DLL_LENGTH)
-            if not is_valid_dos_filename(dll):
+            if not is_valid_dos_filename(dll) or dll == '':
                 dll = b('*invalid*')
 
             if dll:
-                for symbol in import_data:
-                    if symbol.name is None:
-                        funcname = ordlookup.ordLookup(dll.lower(), symbol.ordinal)
-                        if funcname:
-                            symbol.name = funcname
+                if import_data and self.__from_memory and hasattr(import_data[0], '__file_offset__') and import_desc.pIAT != import_data[0].__file_offset__:
+                    pass
+                else:
+                    for symbol in import_data:
+                        if symbol.name is None:
+                            funcname = ordlookup.ordLookup(dll.lower(), symbol.ordinal)
+                            if funcname:
+                                symbol.name = funcname
                 import_descs.append(
                     ImportDescData(
                         struct = import_desc,
@@ -3948,6 +4021,63 @@ class PE(object):
         return import_descs
 
 
+    def parse_directory_exception(self, rva, size):
+        """"""
+
+        runtime_function_size = Structure(self.__IMAGE_RUNTIME_FUNCTION_ENTRY_format__).sizeof()
+        runtime_function_list = []
+        for index in range(rva, rva+size, runtime_function_size):
+            runtime_function = self.__unpack_data__(self.__IMAGE_RUNTIME_FUNCTION_ENTRY_format__, 
+                                self.__data__[index:index+runtime_function_size],
+                                file_offset = index)
+            
+            runtime_function_list.append(runtime_function)
+            if runtime_function.all_zeroes():
+                break
+        for runtime_function in runtime_function_list:
+            if runtime_function.UnwindInformation:
+                runtime_function.UnwindInfoStruct = self.parse_unwind_info(runtime_function.UnwindInformation)
+
+        return runtime_function_list
+
+    def parse_unwind_info(self, pointer):
+        '''https://docs.microsoft.com/en-gb/cpp/build/exception-handling-x64?view=vs-2019#struct-unwind_info'''
+
+        unwind_size = Structure(self.__UNWIND_INFO_format_1__).sizeof()
+        
+        unwind = self.__unpack_data__(self.__UNWIND_INFO_format_1__, self.__data__[pointer: pointer + unwind_size], pointer)
+
+        unwind.Version = unwind.Version_Flags & 0x7
+        unwind.Flags = (unwind.Version_Flags & 0xF8) >> 3
+
+        # ToDo: Deal with version 2
+        '''if unwind.Version != 1:
+            debug.warning('Warning: the other endian {}, {}'.format(unwind.Version_Flags, pointer))
+            return None'''
+
+        array_codes = []
+        code_size =  Structure(self.__UNWIND_CODE_format__).sizeof()
+        for code_pointer in range(pointer + unwind_size, pointer + unwind_size + ((unwind.CountOfUnwindCode + 1) & ~1) * code_size, code_size):
+            code = self.__unpack_data__(self.__UNWIND_CODE_format__, self.__data__[code_pointer: code_pointer + code_size],
+                                        code_pointer)
+            array_codes.append(code)
+        code_end_pointer = pointer + unwind_size + ((unwind.CountOfUnwindCode + 1) & ~1) * code_size
+        unwind.code_array = array_codes
+
+        if unwind.Flags & UNW_FLAG_CHAININFO:
+            runtime_function_size = Structure(self.__IMAGE_RUNTIME_FUNCTION_ENTRY_format__).sizeof()
+
+            unwind.chained_unwind_info = self.__unpack_data__(self.__IMAGE_RUNTIME_FUNCTION_ENTRY_format__, 
+                                self.__data__[code_end_pointer:code_end_pointer+runtime_function_size],
+                                file_offset = code_end_pointer)
+
+            #unwind.chained_unwind_info = self.__unpack_data__(self.__IMAGE_RUNTIME_FUNCTION_ENTRY_format__, self.__data__[code_end_pointer: code_end_pointer + unwind_size], code_end_pointer)
+            unwind.chained_unwind_info.UnwindInfoStruct = self.parse_unwind_info(unwind.chained_unwind_info.UnwindInformation)
+        
+        
+        return unwind
+
+    
     def get_imphash(self):
         impstrs = []
         exts = ['ocx', 'sys', 'dll']
@@ -4117,6 +4247,8 @@ class PE(object):
         if ilt:
             table = ilt
         elif iat:
+            if self.__from_memory:
+                return iat
             table = iat
         else:
             return None
