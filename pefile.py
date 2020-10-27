@@ -4166,8 +4166,8 @@ class PE(object):
                         'Invalid import data at RVA: 0x{0:x}'.format(rva) )
                     break
                 
-                # On execution is normal zero pages due to paging system.
-                # It's very often have zeros in the import_data space that not yeild import_data arrays 
+                # On a PE file dumped from memory is normal to find zero pages due to paging issues.
+                # Hence, it's likely to have zeros in the import_data space that not yeild import_data arrays 
                 if not import_data and not self.__from_memory: 
                     error_count += 1
                     # TODO: do not continue here
@@ -4397,8 +4397,8 @@ class PE(object):
             if repeated_address >= MAX_REPEATED_ADDRESSES:
                 return []
 
-            # On execution some IAT address pointing outside the module, 
-            # so range beween outside and inside pointers are larger than MAX_ADDRESS_SPREAD
+            # On a PE file dumped from memory some IAT addresses point outside the module, 
+            # so the range beween outside and inside pointers are larger than MAX_ADDRESS_SPREAD
             if not self.__from_memory:
                 # if the addresses point somewhere but the difference between the highest
                 # and lowest address is larger than MAX_ADDRESS_SPREAD we assume a bogus
@@ -5938,17 +5938,21 @@ def main():
     import sys
 
     usage = """\
-pefile.py <filename>
+pefile.py [-m] <filename>
 pefile.py exports <filename>"""
 
     if not sys.argv[1:]:
         print(usage)
-    elif sys.argv[1] == 'exports':
+    elif sys.argv[1] == 'exports' or sys.argv[1] == '-m':
         if not sys.argv[2:]:
             sys.exit('error: <filename> required')
-        pe = PE(sys.argv[2])
-        for exp in pe.DIRECTORY_ENTRY_EXPORT.symbols:
-            print(hex(pe.OPTIONAL_HEADER.ImageBase + exp.address), exp.name, exp.ordinal)
+        if sys.argv[1] == 'exports':
+            pe = PE(sys.argv[2])
+            for exp in pe.DIRECTORY_ENTRY_EXPORT.symbols:
+                print(hex(pe.OPTIONAL_HEADER.ImageBase + exp.address), exp.name, exp.ordinal)
+        else:
+            pe = PE(sys.argv[2], from_memory=True)
+            print(pe.dump_info())
     else:
         print(PE(sys.argv[1]).dump_info())
 
