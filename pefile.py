@@ -147,6 +147,8 @@ UNW_FLAG_EHANDLER  = 0x01
 UNW_FLAG_UHANDLER  = 0x02
 UNW_FLAG_CHAININFO = 0x04
 
+PAGE_SIZE = 4096
+
 def two_way_dict(pairs):
     return dict([(e[1], e[0]) for e in pairs]+pairs)
 
@@ -1116,7 +1118,7 @@ class SectionStructure(Structure):
         if length is not None:
             end = offset + length
         elif self.pe._PE__from_memory:
-            size = (self.Misc_VirtualSize/PAGE_SIZE)*PAGE_SIZE + 1 if self.Misc_VirtualSize % PAGE_SIZE else 0
+            size = (self.Misc_VirtualSize/PAGE_SIZE + 1 if self.Misc_VirtualSize % PAGE_SIZE else 0 ) * PAGE_SIZE
             end = offset + size
         else:
             end = offset + self.SizeOfRawData
