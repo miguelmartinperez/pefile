@@ -1116,7 +1116,8 @@ class SectionStructure(Structure):
         if length is not None:
             end = offset + length
         elif self.pe._PE__from_memory:
-            end = offset + self.Misc_VirtualSize
+            size = (self.Misc_VirtualSize/PAGE_SIZE)*PAGE_SIZE + 1 if self.Misc_VirtualSize % PAGE_SIZE else 0
+            end = offset + size
         else:
             end = offset + self.SizeOfRawData
         # PointerToRawData is not adjusted here as we might want to read any possible extra bytes
