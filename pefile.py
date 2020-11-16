@@ -1118,17 +1118,14 @@ class SectionStructure(Structure):
         if length is not None:
             end = offset + length
         elif self.pe._PE__from_memory:
-            size = (self.Misc_VirtualSize/PAGE_SIZE + 1 if self.Misc_VirtualSize % PAGE_SIZE else 0 ) * PAGE_SIZE
+            size = (int(self.Misc_VirtualSize/PAGE_SIZE) + (1 if self.Misc_VirtualSize % PAGE_SIZE else 0) ) * PAGE_SIZE
             end = offset + size
         else:
             end = offset + self.SizeOfRawData
         # PointerToRawData is not adjusted here as we might want to read any possible extra bytes
         # that might get cut off by aligning the start (and hence cutting something off the end)
         #
-        if self.pe._PE__from_memory:
-            if end > self.VirtualAddress_adj + self.Misc_VirtualSize:
-                end = self.VirtualAddress_adj + self.Misc_VirtualSize
-        else:
+        if not self.pe._PE__from_memory:
             if end > self.PointerToRawData + self.SizeOfRawData:
                 end = self.PointerToRawData + self.SizeOfRawData
         return self.pe.__data__[offset:end]
@@ -4067,7 +4064,7 @@ class PE(object):
         code_end_pointer = pointer + unwind_size + ((unwind.CountOfUnwindCode + 1) & ~1) * code_size
         unwind.code_array = array_codes
 
-        if unwind.Flags & UNW_FLAG_CHAININFO:
+        if (unwind.Flags & UNW_FLAG_CHAININFO) and not (unwind.Flags & UNW_FLAG_EHANDLER + UNW_FLAG_UHANDLER):
             runtime_function_size = Structure(self.__IMAGE_RUNTIME_FUNCTION_ENTRY_format__).sizeof()
 
             unwind.chained_unwind_info = self.__unpack_data__(self.__IMAGE_RUNTIME_FUNCTION_ENTRY_format__, 
