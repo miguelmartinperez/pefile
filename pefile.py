@@ -1104,7 +1104,7 @@ class SectionStructure(Structure):
 
         Returns bytes() under Python 3.x and set() under Python 2.7
         """
-        if self.pe._PE__from_memory:
+        if self.pe._PE__virtual_layout:
             if start is None:
                 offset = self.get_VirtualAddress_adj()
             else:
@@ -1117,7 +1117,7 @@ class SectionStructure(Structure):
 
         if length is not None:
             end = offset + length
-        elif self.pe._PE__from_memory:
+        elif self.pe._PE__virtual_layout:
             size = (int(self.Misc_VirtualSize/PAGE_SIZE) + (1 if self.Misc_VirtualSize % PAGE_SIZE else 0) ) * PAGE_SIZE
             end = offset + size
         else:
@@ -1125,7 +1125,7 @@ class SectionStructure(Structure):
         # PointerToRawData is not adjusted here as we might want to read any possible extra bytes
         # that might get cut off by aligning the start (and hence cutting something off the end)
         #
-        if not self.pe._PE__from_memory:
+        if not self.pe._PE__virtual_layout:
             if end > self.PointerToRawData + self.SizeOfRawData:
                 end = self.PointerToRawData + self.SizeOfRawData
         return self.pe.__data__[offset:end]
@@ -1153,7 +1153,7 @@ class SectionStructure(Structure):
 
 
     def get_offset_from_rva(self, rva):
-        if self.pe._PE__from_memory:
+        if self.pe._PE__virtual_layout:
             return rva
         return rva - self.get_VirtualAddress_adj() + self.get_PointerToRawData_adj()
 
@@ -1876,7 +1876,7 @@ class PE(object):
         ('I,TimeDateStamp', 'H,OffsetModuleName', 'H,Reserved') )
 
     def __init__(self, name=None, data=None, fast_load=None,
-                 max_symbol_exports=MAX_SYMBOL_EXPORT_COUNT, from_memory=False):
+                 max_symbol_exports=MAX_SYMBOL_EXPORT_COUNT, virtual_layout=False):
 
         self.max_symbol_exports = max_symbol_exports
 
@@ -1894,7 +1894,7 @@ class PE(object):
         # in order to save the modifications made
         self.__structures__ = []
         self.__from_file = None
-        self.__from_memory = from_memory
+        self.__virtual_layout = virtual_layout
 
          # We only want to print these warnings once
         self.FileAlignment_Warning = False
@@ -1936,8 +1936,8 @@ class PE(object):
 
         return structure
 
-    def from_memory(self):
-        return self.__from_memory
+    def virtual_layout(self):
+        return self.__virtual_layout
 
 
     def __parse__(self, fname, data, fast_load):
@@ -2942,7 +2942,7 @@ class PE(object):
 
             elif dbg.Type == 2:
                 # if IMAGE_DEBUG_TYPE_CODEVIEW
-                if self.__from_memory:
+                if self.__virtual_layout:
                     dbg_type_offset = self.get_rva_from_offset(dbg.PointerToRawData)
                 else:
                     dbg_type_offset = dbg.PointerToRawData
@@ -3000,7 +3000,7 @@ class PE(object):
 
             elif dbg.Type == 4:
                 # IMAGE_DEBUG_TYPE_MISC
-                if self.__from_memory:
+                if self.__virtual_layout:
                     dbg_type_offset = self.get_rva_from_offset(dbg.PointerToRawData)
                 else:
                     dbg_type_offset = dbg.PointerToRawData
@@ -3995,7 +3995,7 @@ class PE(object):
                     'Invalid import data at RVA: 0x{0:x}'.format(rva) )
                 break
 
-            if not import_data and not self.__from_memory:
+            if not import_data and not self.__virtual_layout:
                 error_count += 1
                 continue
 
@@ -4004,7 +4004,7 @@ class PE(object):
                 dll = b('*invalid*')
 
             if dll:
-                if import_data and self.__from_memory and hasattr(import_data[0], '__file_offset__') and import_desc.pIAT != import_data[0].__file_offset__:
+                if import_data and self.__virtual_layout and hasattr(import_data[0], '__file_offset__') and import_desc.pIAT != import_data[0].__file_offset__:
                     pass
                 else:
                     for symbol in import_data:
@@ -4168,7 +4168,7 @@ class PE(object):
                 
                 # On a PE file dumped from memory is normal to find zero pages due to paging issues.
                 # Hence, it's likely to have zeros in the import_data space that not yeild import_data arrays 
-                if not import_data and not self.__from_memory: 
+                if not import_data and not self.__virtual_layout: 
                     error_count += 1
                     # TODO: do not continue here
                     continue
@@ -4247,7 +4247,7 @@ class PE(object):
         if ilt:
             table = ilt
         elif iat:
-            if self.__from_memory:
+            if self.__virtual_layout:
                 return iat
             table = iat
         else:
@@ -4399,7 +4399,7 @@ class PE(object):
 
             # On a PE file dumped from memory some IAT addresses point outside the module, 
             # so the range beween outside and inside pointers are larger than MAX_ADDRESS_SPREAD
-            if not self.__from_memory:
+            if not self.__virtual_layout:
                 # if the addresses point somewhere but the difference between the highest
                 # and lowest address is larger than MAX_ADDRESS_SPREAD we assume a bogus
                 # table as the addresses should be contained within a module
@@ -4567,7 +4567,7 @@ class PE(object):
         Given a RVA and the size of the chunk to retrieve, this method
         will find the section where the data lies and return the data.
         """
-        if self.__from_memory:
+        if self.__virtual_layout:
             if length:
                 end = rva + length
             else:
@@ -4632,7 +4632,7 @@ class PE(object):
         Given a RVA , this method will find the section where the
         data lies and return the offset within the file.
         """
-        if self.__from_memory:
+        if self.__virtual_layout:
             return rva
             
         s = self.get_section_by_rva(rva)
@@ -5938,12 +5938,12 @@ def main():
     import sys
 
     usage = """\
-pefile.py [-m] <filename>
+pefile.py [--virtual-layout] <filename>
 pefile.py exports <filename>"""
 
     if not sys.argv[1:]:
         print(usage)
-    elif sys.argv[1] == 'exports' or sys.argv[1] == '-m':
+    elif sys.argv[1] == 'exports' or sys.argv[1] == '--virtual-layout':
         if not sys.argv[2:]:
             sys.exit('error: <filename> required')
         if sys.argv[1] == 'exports':
@@ -5951,7 +5951,7 @@ pefile.py exports <filename>"""
             for exp in pe.DIRECTORY_ENTRY_EXPORT.symbols:
                 print(hex(pe.OPTIONAL_HEADER.ImageBase + exp.address), exp.name, exp.ordinal)
         else:
-            pe = PE(sys.argv[2], from_memory=True)
+            pe = PE(sys.argv[2], virtual_layout=True)
             print(pe.dump_info())
     else:
         print(PE(sys.argv[1]).dump_info())
